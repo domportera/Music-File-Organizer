@@ -6,6 +6,7 @@ This CLI application organizes all of your music files in your music directory a
 
 ## Features:
 - Sorts files into Artist/Year - Album/##. TrackName
+- Sorts playlists into /Playlists folder
 - If duplicates are found, the file with the highest bitrate will be preserved. 
 - It will also attempt to moving any album art along with it, but no promises!
 
