@@ -13,6 +13,8 @@ public static class Program
     const StringComparison PathComparison = StringComparison.Ordinal;
 #endif
 
+    const bool UseAlbumArtist = true;
+
     static readonly HashSet<string> AudioFileTypes = new()
     {
         ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".mp1", ".mp2", ".aax", ".caf",
@@ -254,7 +256,24 @@ public static class Program
         newFileName = ReplaceInvalidCharactersInFileName(newFileName, invalidCharsInFileName);
         List<string> pathInConstruction = new(4);
 
-        TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Artist, "Unknown Artist", out var artist);
+        string rawArtist;
+        if (UseAlbumArtist)
+        {
+            rawArtist = track.AlbumArtist;
+            if (string.IsNullOrWhiteSpace(rawArtist))
+                rawArtist = track.Artist;
+        }
+        else
+        {
+            rawArtist = track.Artist;
+            if (string.IsNullOrWhiteSpace(rawArtist))
+                rawArtist = track.AlbumArtist;
+        }
+
+        if (string.IsNullOrWhiteSpace(rawArtist))
+            rawArtist = track.OriginalArtist;
+
+        TryCorrectSubdirectory(invalidCharsInDirectoryName, rawArtist, "Unknown Artist", out var artist);
         TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Album, "Unknown Album", out var album);
 
         var year = track.Year;
@@ -357,12 +376,12 @@ public static class Program
         static string GetTrackString(Track track)
         {
             var str = $"({track.Duration}s {track.AudioFormat.ShortName} {track.Bitrate}";
-            
+
             if (track.BitDepth != -1)
                 str += $" {track.BitDepth}";
-            
+
             str += $") || [\"{track.Artist} - {track.TrackNumber}. {track.Title}\"] || {track.Path}\n";
-            
+
             return str;
         }
     }
