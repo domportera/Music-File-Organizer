@@ -19,6 +19,11 @@ public static class Program
         ".m4b", ".mp4", ".mid", ".oga", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv", ".wma", ".asf"
     };
 
+    static readonly HashSet<string> PlaylistFileTypes = new()
+    {
+        ".m3u", ".m3u8", ".pls", ".wpl", ".zpl", ".xspf"
+    };
+
     public static void Main(string[] args)
     {
         // get all files recursively from the path
@@ -37,6 +42,22 @@ public static class Program
             .ToArray();
 
         const string pattern = "{0}. {1}{2}";
+
+
+        // move playlists
+        var playlistDirectoryPath = Path.Combine(musicDirectory, "Playlists");
+        var playlistDirectory = new DirectoryInfo(playlistDirectoryPath);
+        playlistDirectory.Create();
+
+        files.AsParallel()
+            .Where(file => PlaylistFileTypes.Contains(Path.GetExtension(file)))
+            .ForAll(playlist =>
+            {
+                var playlistName = Path.GetFileName(playlist);
+                var playlistPath = Path.Combine(playlistDirectoryPath, playlistName);
+                File.Move(playlist, playlistPath, true);
+                Console.WriteLine($"Moved playlist \"{playlistName}\" to \"{playlistPath}\"");
+            });
 
         if (!UseParallel)
         {
