@@ -4,7 +4,7 @@ namespace MusicRename;
 
 public static class Program
 {
-    static readonly bool UseParallel = false;
+    static readonly bool UseParallel = true;
 
     // if windows, use StringComparison.OrdinalIgnoreCase, otherwise use StringComparison.Ordinal
 #if WINDOWS
@@ -124,26 +124,6 @@ public static class Program
 
     static void HandleTrackConflicts()
     {
-        List<TrackConflict> uniqueConflicts = new(_trackConflicts.Count);
-        // remove duplicate conflicts without using hashcode
-        for (int i = _trackConflicts.Count - 1; i >= 0; i--)
-        {
-            var unique = true;
-            for (int j = i - 1; j >= 0; j--)
-            {
-                if (_trackConflicts[i] == _trackConflicts[j])
-                {
-                    unique = false;
-                    break;
-                }
-            }
-
-            if (unique)
-            {
-                uniqueConflicts.Add(_trackConflicts[i]);
-            }
-        }
-
         foreach (var conflict in _trackConflicts)
         {
             ReplaceOrDeleteFile(conflict);
@@ -153,8 +133,12 @@ public static class Program
     static void MoveStrayFiles(MovedTrackInfo movedTrackInfo)
     {
         var originalDirectory = movedTrackInfo.OriginalDirectory;
+        if (!originalDirectory.Exists)
+            return;
+
         var newDirectoryString = movedTrackInfo.NewDirectoryString;
         var trackPath = movedTrackInfo.OriginalTrackPath;
+
         var strayDirectories = originalDirectory
             .GetDirectories()
             .Where(directory => !string.Equals(directory.FullName, newDirectoryString, PathComparison));
@@ -162,13 +146,24 @@ public static class Program
         foreach (var strayDirectory in strayDirectories)
         {
             var newDir = Path.Combine(newDirectoryString, strayDirectory.Name);
-            var straysInDirectory = strayDirectory.GetFiles();
+
+            var allRemainingFiles = strayDirectory.GetFiles("*", SearchOption.AllDirectories);
+            var straysInDirectory = allRemainingFiles
+                .Where(file => !AudioFileTypes.Contains(file.Extension))
+                .ToArray();
+
+            if (straysInDirectory.Length > 0)
+                Directory.CreateDirectory(newDir);
+
             foreach (var strayFile in straysInDirectory)
             {
                 File.Move(strayFile.FullName, Path.Combine(newDir, strayFile.Name));
             }
 
-            strayDirectory.Delete();
+            if (allRemainingFiles.Length == straysInDirectory.Length)
+            {
+                DeleteEmptyDirectories(strayDirectory.FullName);
+            }
         }
 
         var strayFiles = originalDirectory.GetFiles()
@@ -179,6 +174,8 @@ public static class Program
         {
             File.Move(strayFile.FullName, Path.Combine(newDirectoryString, strayFile.Name));
         }
+
+        DeleteEmptyDirectories(originalDirectory.FullName);
     }
 
     static void DeleteEmptyDirectories(string rootDir)
@@ -246,8 +243,16 @@ public static class Program
             ? string.Format(pattern, trackNumber.Value.ToString("00"), title, extension)
             : track.Title + extension;
 
+        var cd = track.DiscNumber;
+        bool hasCd = false;
+        if (cd is > 0)
+        {
+            newFileName = $"{cd.Value:0}_{newFileName}";
+            hasCd = true;
+        }
+
         newFileName = ReplaceInvalidCharactersInFileName(newFileName, invalidCharsInFileName);
-        string[] pathInConstruction = new string[2];
+        List<string> pathInConstruction = new(4);
 
         TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Artist, "Unknown Artist", out var artist);
         TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Album, "Unknown Album", out var album);
@@ -258,8 +263,11 @@ public static class Program
 
         string newPath = musicDirectory;
 
-        pathInConstruction[0] = artist;
-        pathInConstruction[1] = album;
+        pathInConstruction.Add(artist);
+        pathInConstruction.Add(album);
+
+        if (hasCd)
+            pathInConstruction.Add($"Disc {cd!.Value:0}");
 
         newDirectory = null;
         foreach (var path in pathInConstruction)
@@ -326,10 +334,12 @@ public static class Program
             var trackPath = existingTrack.Path;
             if (track.Duration != existingTrack.Duration)
             {
-                throw new Exception($"Identical tracks have different durations:\n" +
-                                    GetTrackString(track) + GetTrackString(existingTrack));
+                var difference = Math.Abs(track.DurationMs - existingTrack.DurationMs);
+                Console.WriteLine($"Identical tracks have different durations (difference: {difference:f0}ms).\n" +
+                                  GetTrackString(track) + GetTrackString(existingTrack));
+                return false;
             }
-            
+
             if (existingTrack.Bitrate < track.Bitrate)
             {
                 File.Move(track.Path, trackPath, true);
@@ -342,6 +352,18 @@ public static class Program
             // if the existing track is better quality, delete the new one
             File.Delete(track.Path);
             return false;
+        }
+
+        static string GetTrackString(Track track)
+        {
+            var str = $"({track.Duration}s {track.AudioFormat.ShortName} {track.Bitrate}";
+            
+            if (track.BitDepth != -1)
+                str += $" {track.BitDepth}";
+            
+            str += $") || [\"{track.Artist} - {track.TrackNumber}. {track.Title}\"] || {track.Path}\n";
+            
+            return str;
         }
     }
 
@@ -392,7 +414,7 @@ public static class Program
         directoryName = directoryName
             .Replace("; ", ", ")
             .Replace("..", ".");
-        
+
         while (directoryName.EndsWith('.'))
             directoryName = directoryName.Substring(0, directoryName.Length - 1);
 
@@ -413,11 +435,6 @@ public static class Program
         }
 
         return track;
-    }
-
-    static string GetTrackString(Track track)
-    {
-        return $"\"{track.Artist} - {track.Album} - {track.TrackNumber}.{track.Title}\" ({track.Path})\n";
     }
 
     readonly struct MovedTrackInfo
