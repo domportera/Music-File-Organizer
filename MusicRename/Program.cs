@@ -4,7 +4,6 @@ namespace MusicRename;
 
 public static class Program
 {
-    static readonly bool UseParallel = true;
 
     // if windows, use StringComparison.OrdinalIgnoreCase, otherwise use StringComparison.Ordinal
 #if WINDOWS
@@ -13,7 +12,9 @@ public static class Program
     const StringComparison PathComparison = StringComparison.Ordinal;
 #endif
 
+    const bool MoveAudioFilesInParallel = true;
     const bool UseAlbumArtist = true;
+    const bool UseDiscSubdirectory = false;
 
     static readonly HashSet<string> AudioFileTypes = new()
     {
@@ -61,7 +62,7 @@ public static class Program
                 Console.WriteLine($"Moved playlist \"{playlistName}\" to \"{playlistPath}\"");
             });
 
-        if (!UseParallel)
+        if (!MoveAudioFilesInParallel)
         {
             var trackJob = files
                 .Where(file => AudioFileTypes.Contains(Path.GetExtension(file)))
@@ -285,7 +286,7 @@ public static class Program
         pathInConstruction.Add(artist);
         pathInConstruction.Add(album);
 
-        if (hasCd)
+        if (UseDiscSubdirectory && hasCd)
             pathInConstruction.Add($"Disc {cd!.Value:0}");
 
         newDirectory = null;
