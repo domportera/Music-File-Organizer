@@ -9,6 +9,7 @@ This CLI application organizes all of your music files in your music directory a
 - Sorts playlists into /Playlists folder
 - If duplicates are found, the file with the highest bitrate will be preserved. 
 - It will also attempt to moving any album art along with it, but no promises!
+- Compress lossless files into FLAC (compression level 8) - including FLAC files above a certain bitrate threshold
 
 Simply run the application with an argument for your music directory. e.g. `music-rename.exe "C:/User/YourName/Music"`
 

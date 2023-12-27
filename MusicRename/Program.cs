@@ -4,7 +4,6 @@ namespace MusicRename;
 
 public static class Program
 {
-
     // if windows, use StringComparison.OrdinalIgnoreCase, otherwise use StringComparison.Ordinal
 #if WINDOWS
     const StringComparison PathComparison = StringComparison.OrdinalIgnoreCase;
@@ -15,6 +14,7 @@ public static class Program
     const bool MoveAudioFilesInParallel = true;
     const bool UseAlbumArtist = true;
     const bool UseDiscSubdirectory = false;
+    const bool IgnoreHiddenFolders = true;
 
     static readonly HashSet<string> AudioFileTypes = new()
     {
@@ -22,10 +22,22 @@ public static class Program
         ".m4b", ".mp4", ".mid", ".oga", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv", ".wma", ".asf"
     };
 
+    static readonly HashSet<string> LosslessAudioFileTypes = new()
+    {
+        ".flac", ".wav", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv"
+    };
+
     static readonly HashSet<string> PlaylistFileTypes = new()
     {
         ".m3u", ".m3u8", ".pls", ".wpl", ".zpl", ".xspf"
     };
+
+    static readonly List<string> IgnoreDirectories = new()
+    {
+        ".stfolder", ".stversions"
+    };
+
+    const bool CompressionEnabled = true;
 
     public static void Main(string[] args)
     {
@@ -37,14 +49,12 @@ public static class Program
         }
 
         var musicDirectory = args[0];
-        var files = Directory.GetFiles(musicDirectory, "*", SearchOption.AllDirectories);
+
         var invalidCharsInFileName = Path.GetInvalidFileNameChars();
         var invalidCharsInDirectoryName = invalidCharsInFileName
             .Concat(Path.GetInvalidPathChars())
             .Distinct()
             .ToArray();
-
-        const string pattern = "{0}. {1}{2}";
 
 
         // move playlists
@@ -52,20 +62,58 @@ public static class Program
         var playlistDirectory = new DirectoryInfo(playlistDirectoryPath);
         playlistDirectory.Create();
 
-        files.AsParallel()
-            .Where(file => PlaylistFileTypes.Contains(Path.GetExtension(file)))
+        var files = Directory.EnumerateFiles(musicDirectory, "*", SearchOption.AllDirectories)
+            .Where(file =>
+            {
+                string[] subdirectories = file.Split(Path.DirectorySeparatorChar);
+                if (subdirectories.Length <= 0)
+                {
+                    return true;
+                }
+
+                if (IgnoreHiddenFolders)
+                {
+                    foreach (var subdirectory in subdirectories)
+                    {
+                        if (subdirectory.StartsWith('.'))
+                            return false;
+                    }
+                }
+
+                foreach (var ignoredDir in IgnoreDirectories)
+                {
+                    foreach (var subdirectory in subdirectories)
+                    {
+                        if (subdirectory.Equals(ignoredDir, PathComparison))
+                            return false;
+                    }
+                }
+
+                return true;
+            })
+            .Select(x => new FileInfo(x))
+            .ToArray();
+
+        var audioFiles = files
+            .Where(file => AudioFileTypes.Contains(file.Extension))
+            .ToArray();
+        var playlistFiles = files
+            .Where(file => PlaylistFileTypes.Contains(file.Extension))
+            .Where(file => file.Directory?.FullName != playlistDirectory.FullName)
+            .ToArray();
+
+        playlistFiles
+            .AsParallel()
             .ForAll(playlist =>
             {
-                var playlistName = Path.GetFileName(playlist);
-                var playlistPath = Path.Combine(playlistDirectoryPath, playlistName);
-                File.Move(playlist, playlistPath, true);
-                Console.WriteLine($"Moved playlist \"{playlistName}\" to \"{playlistPath}\"");
+                var playlistPath = Path.Combine(playlistDirectoryPath, playlist.Name);
+                File.Move(playlist.FullName, playlistPath, true);
+                Console.WriteLine($"Moved playlist \"{playlist.Name}\" to \"{playlistPath}\"");
             });
 
         if (!MoveAudioFilesInParallel)
         {
-            var trackJob = files
-                .Where(file => AudioFileTypes.Contains(Path.GetExtension(file)))
+            var trackJob = audioFiles
                 .Select(LoadTrack)
                 .Where(track => track is not null)
                 .Select(track => track!);
@@ -77,27 +125,46 @@ public static class Program
         }
         else
         {
-            files
+            audioFiles
                 .AsParallel()
-                .Where(file => AudioFileTypes.Contains(Path.GetExtension(file)))
                 .Select(LoadTrack)
                 .Where(track => track is not null)
                 .Select(track => track!)
                 .ForAll(Organize);
         }
 
-        HandleTrackConflicts();
+        Conflicts.HandleTrackConflicts(TrackConflicts);
 
-        foreach (var movedTrackInfo in _movedTrackInfos)
+        foreach (var movedTrackInfo in MovedTrackInfos)
         {
             MoveStrayFiles(movedTrackInfo);
         }
 
-        DeleteEmptyDirectories(musicDirectory);
+        FileIO.DeleteEmptyDirectories(musicDirectory, IgnoreDirectories);
+
+        if (CompressionEnabled)
+        {
+            var losslessFiles = Directory.GetFiles(musicDirectory, "*", SearchOption.AllDirectories)
+                .AsParallel()
+                .Select(file => new FileInfo(file))
+                .Where(file => LosslessAudioFileTypes.Contains(file.Extension))
+                .ToArray();
+
+            Console.WriteLine($"Found {losslessFiles.Length} lossless files to compress");
+
+            if (losslessFiles.Length > 0)
+            {
+                Ffmpeg.CompressFiles(losslessFiles);
+            }
+        }
+
+        Console.WriteLine($"End of program");
         return;
 
         void Organize(Track currentTrack)
         {
+            const string pattern = "{0}. {1}{2}";
+            
             try
             {
                 var organized = OrganizeTrack(musicDirectory, currentTrack, pattern, invalidCharsInFileName,
@@ -115,21 +182,13 @@ public static class Program
                 var originalDirectory = new DirectoryInfo(originalDirectoryString);
                 var newDirectoryString = newDirectory!.FullName;
                 var movedTrackInfo = new MovedTrackInfo(originalDirectory, newDirectoryString, track.Path);
-                _movedTrackInfos.Add(movedTrackInfo);
+                MovedTrackInfos.Add(movedTrackInfo);
             }
             catch (Exception e)
             {
                 Console.WriteLine($"Error organizing {currentTrack.Path}\n" +
                                   $"{e.Message}");
             }
-        }
-    }
-
-    static void HandleTrackConflicts()
-    {
-        foreach (var conflict in _trackConflicts)
-        {
-            ReplaceOrDeleteFile(conflict);
         }
     }
 
@@ -144,7 +203,8 @@ public static class Program
 
         var strayDirectories = originalDirectory
             .GetDirectories()
-            .Where(directory => !string.Equals(directory.FullName, newDirectoryString, PathComparison));
+            .Where(directory => !string.Equals(directory.FullName, newDirectoryString, PathComparison)
+                                && !IgnoreDirectories.Contains(directory.Name));
 
         foreach (var strayDirectory in strayDirectories)
         {
@@ -165,7 +225,7 @@ public static class Program
 
             if (allRemainingFiles.Length == straysInDirectory.Length)
             {
-                DeleteEmptyDirectories(strayDirectory.FullName);
+                FileIO.DeleteEmptyDirectories(strayDirectory.FullName, IgnoreDirectories);
             }
         }
 
@@ -175,47 +235,10 @@ public static class Program
 
         foreach (var strayFile in strayFiles)
         {
-            File.Move(strayFile.FullName, Path.Combine(newDirectoryString, strayFile.Name));
+            File.Move(strayFile.FullName, Path.Combine(newDirectoryString, strayFile.Name), true);
         }
 
-        DeleteEmptyDirectories(originalDirectory.FullName);
-    }
-
-    static void DeleteEmptyDirectories(string rootDir)
-    {
-        var directories = Directory.GetDirectories(rootDir, "*", SearchOption.AllDirectories)
-            .OrderByDescending(directory => directory.Length);
-
-        foreach (var directory in directories)
-        {
-            try
-            {
-                if (Directory.GetDirectories(directory).Length > 0)
-                {
-                    DeleteEmptyDirectories(directory);
-                }
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Error querying directory \"{directory}\"\n" +
-                                  $"{e.Message}");
-                continue;
-            }
-
-            if (Directory.GetFiles(directory).Length != 0 || Directory.GetDirectories(directory).Length != 0)
-                continue;
-
-            try
-            {
-                Directory.Delete(directory);
-                Console.WriteLine($"Deleted {directory}");
-            }
-            catch (IOException e)
-            {
-                Console.WriteLine($"Error deleting {directory}\n" +
-                                  $">> {e.Message}");
-            }
-        }
+        FileIO.DeleteEmptyDirectories(originalDirectory.FullName, IgnoreDirectories);
     }
 
     static bool OrganizeTrack(string musicDirectory, Track currentTrack, string pattern, char[] invalidCharsInFileName,
@@ -239,7 +262,7 @@ public static class Program
             title = titleSpan.ToString();
         }
 
-        RemoveDoubleSpaces(ref title);
+        FileIO.RemoveDoubleSpaces(ref title);
 
         string extension = Path.GetExtension(track.Path);
         var newFileName = trackNumber is > 0
@@ -254,7 +277,7 @@ public static class Program
             hasCd = true;
         }
 
-        newFileName = ReplaceInvalidCharactersInFileName(newFileName, invalidCharsInFileName);
+        newFileName = FileIO.ReplaceInvalidCharactersInFileName(newFileName, invalidCharsInFileName);
         List<string> pathInConstruction = new(4);
 
         string rawArtist;
@@ -274,8 +297,8 @@ public static class Program
         if (string.IsNullOrWhiteSpace(rawArtist))
             rawArtist = track.OriginalArtist;
 
-        TryCorrectSubdirectory(invalidCharsInDirectoryName, rawArtist, "Unknown Artist", out var artist);
-        TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Album, "Unknown Album", out var album);
+        FileIO.TryCorrectSubdirectory(invalidCharsInDirectoryName, rawArtist, "Unknown Artist", out var artist);
+        FileIO.TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Album, "Unknown Album", out var album);
 
         var year = track.Year;
         if (year is > 1000) // ugly check for valid year
@@ -306,145 +329,20 @@ public static class Program
 
         if (!File.Exists(newPath))
         {
-            return MoveFile(track.Path, newPath);
+            var moved = FileIO.MoveFile(track.Path, newPath);
+            FilePaths.Add(moved ? newPath : track.Path);
+            return moved;
         }
 
         var conflict = new TrackConflict(track, newPath);
-        _trackConflicts.Add(conflict);
+        TrackConflicts.Add(conflict);
         return true;
     }
 
-    static bool MoveFile(string srcPath, string destinationPath)
-    {
-        try
-        {
-            File.Move(srcPath, destinationPath);
-            Console.WriteLine($"Moved \"{srcPath}\"\n------> \"{destinationPath}\"");
-            return true;
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine($"\n\n!!!!!!!!!!Error moving {srcPath} to {destinationPath}!!!!!!!!!!!!\n" +
-                              $"{e.Message}\n\n");
-
-            return false;
-        }
-    }
-
-    static bool ReplaceOrDeleteFile(TrackConflict conflict)
-    {
-        var track = conflict.Track;
-        var destinationPath = conflict.ExistingTrackPath;
-        try
-        {
-            var existingTrack = LoadTrack(destinationPath);
-            if (existingTrack == null)
-                throw new Exception($"Failed to load existing track at {destinationPath}");
-
-            return ChooseBestQuality(track, existingTrack);
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine($"Error choosing best quality for {destinationPath}:\n{e}");
-            return false;
-        }
-
-        static bool ChooseBestQuality(Track track, Track existingTrack)
-        {
-            var trackPath = existingTrack.Path;
-            if (track.Duration != existingTrack.Duration)
-            {
-                var difference = Math.Abs(track.DurationMs - existingTrack.DurationMs);
-                Console.WriteLine($"Identical tracks have different durations (difference: {difference:f0}ms).\n" +
-                                  GetTrackString(track) + GetTrackString(existingTrack));
-                return false;
-            }
-
-            if (existingTrack.Bitrate < track.Bitrate)
-            {
-                File.Move(track.Path, trackPath, true);
-                Console.WriteLine(
-                    $"Replaced lower quality track ({existingTrack.Bitrate}kbps vs {track.Bitrate}kbps)\n" +
-                    $"------> {trackPath}");
-                return true;
-            }
-
-            // if the existing track is better quality, delete the new one
-            File.Delete(track.Path);
-            return false;
-        }
-
-        static string GetTrackString(Track track)
-        {
-            var str = $"({track.Duration}s {track.AudioFormat.ShortName} {track.Bitrate}";
-
-            if (track.BitDepth != -1)
-                str += $" {track.BitDepth}";
-
-            str += $") || [\"{track.Artist} - {track.TrackNumber}. {track.Title}\"] || {track.Path}\n";
-
-            return str;
-        }
-    }
-
-    static bool TryCorrectSubdirectory(char[] invalidCharsInDirectoryName, string album, string defaultName,
-        out string dir)
-    {
-        if (string.IsNullOrWhiteSpace(album))
-        {
-            dir = defaultName;
-            return false;
-        }
-
-        dir = ReplaceInvalidCharactersInDirectoryName(album, invalidCharsInDirectoryName);
-        dir = dir.Trim();
-        RemoveDoubleSpaces(ref album);
-        return true;
-    }
-
-    static void RemoveDoubleSpaces(ref string title)
-    {
-        while (title.Contains("  "))
-        {
-            title = title.Replace("  ", " ");
-        }
-    }
-
-    static string ReplaceInvalidCharactersInFileName(string fileName, char[] invalidChars)
-    {
-        var nameSpan = fileName.AsSpan();
-        foreach (var invalidChar in invalidChars)
-        {
-            if (nameSpan.Contains(invalidChar))
-                fileName = fileName.Replace(invalidChar, '-');
-        }
-
-        return fileName;
-    }
-
-    static string ReplaceInvalidCharactersInDirectoryName(string directoryName, char[] invalidChars)
-    {
-        var nameSpan = directoryName.AsSpan();
-        foreach (var invalidChar in invalidChars)
-        {
-            if (nameSpan.Contains(invalidChar))
-                directoryName = directoryName.Replace(invalidChar, '_');
-        }
-
-        directoryName = directoryName
-            .Replace("; ", ", ")
-            .Replace("..", ".");
-
-        while (directoryName.EndsWith('.'))
-            directoryName = directoryName.Substring(0, directoryName.Length - 1);
-
-
-        return directoryName;
-    }
-
-    static Track? LoadTrack(string path)
+    public static Track? LoadTrack(FileInfo fileInfo)
     {
         Track? track = null;
+        var path = fileInfo.FullName;
         try
         {
             track = new Track(path, true);
@@ -471,28 +369,7 @@ public static class Program
         }
     }
 
-    readonly struct TrackConflict
-    {
-        public readonly Track Track;
-        public readonly string ExistingTrackPath;
-
-        public TrackConflict(Track track, string existingTrackPath)
-        {
-            Track = track;
-            ExistingTrackPath = existingTrackPath;
-        }
-
-        public static bool operator ==(TrackConflict left, TrackConflict right)
-        {
-            return left.Track.Path == right.ExistingTrackPath || right.Track.Path == left.ExistingTrackPath;
-        }
-
-        public static bool operator !=(TrackConflict left, TrackConflict right) => !(left == right);
-
-        public bool Equals(TrackConflict other) => this == other;
-        public override bool Equals(object? obj) => obj is TrackConflict other && this == other;
-    }
-
-    static readonly List<TrackConflict> _trackConflicts = new();
-    static readonly List<MovedTrackInfo> _movedTrackInfos = new();
+    static readonly List<TrackConflict> TrackConflicts = new();
+    static readonly List<string> FilePaths = new();
+    static readonly List<MovedTrackInfo> MovedTrackInfos = new();
 }
