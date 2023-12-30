@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using ATL;
 
-namespace MusicRename;
+namespace MusicOrganizer;
 
 public static class Ffmpeg
 {

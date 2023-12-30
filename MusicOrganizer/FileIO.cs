@@ -1,4 +1,4 @@
-namespace MusicRename;
+namespace MusicOrganizer;
 
 public class FileIO
 {
@@ -74,7 +74,7 @@ public class FileIO
         return directoryName;
     }
 
-    public static void DeleteEmptyDirectories(string rootDir, ICollection<string> ignoreDirectories)
+    public static void DeleteEmptyDirectories(string rootDir, ICollection<string> ignoreDirectories, ICollection<string> doNotDeleteDirectories)
     {
         var directories = Directory.GetDirectories(rootDir, "*", SearchOption.AllDirectories)
             .OrderByDescending(directory => directory.Length);
@@ -89,7 +89,7 @@ public class FileIO
             {
                 if (Directory.GetDirectories(directory).Length > 0)
                 {
-                    DeleteEmptyDirectories(directory, ignoreDirectories);
+                    DeleteEmptyDirectories(directory, ignoreDirectories, doNotDeleteDirectories);
                 }
             }
             catch (Exception e)
@@ -99,7 +99,11 @@ public class FileIO
                 continue;
             }
 
-            if (Directory.GetFiles(directory).Length != 0 || Directory.GetDirectories(directory).Length != 0)
+            var skip =Directory.GetFiles(directory).Length != 0 
+                      || Directory.GetDirectories(directory).Length != 0
+                      || doNotDeleteDirectories.Contains(directoryInfo.Name);
+            
+            if (skip)
                 continue;
 
             try

@@ -1,6 +1,7 @@
-﻿using ATL;
+﻿using System.Collections.Frozen;
+using ATL;
 
-namespace MusicRename;
+namespace MusicOrganizer;
 
 public static class Program
 {
@@ -16,26 +17,31 @@ public static class Program
     const bool UseDiscSubdirectory = false;
     const bool IgnoreHiddenFolders = true;
 
-    static readonly HashSet<string> AudioFileTypes = new()
+    static readonly FrozenSet<string> AudioFileTypes = new HashSet<string>
     {
         ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".mp1", ".mp2", ".aax", ".caf",
         ".m4b", ".mp4", ".mid", ".oga", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv", ".wma", ".asf"
-    };
+    }.ToFrozenSet();
 
-    static readonly HashSet<string> LosslessAudioFileTypes = new()
+    static readonly FrozenSet<string> LosslessAudioFileTypes = new HashSet<string>
     {
         ".flac", ".wav", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv"
-    };
+    }.ToFrozenSet();
 
-    static readonly HashSet<string> PlaylistFileTypes = new()
+    static readonly FrozenSet<string> PlaylistFileTypes = new HashSet<string>
     {
         ".m3u", ".m3u8", ".pls", ".wpl", ".zpl", ".xspf"
-    };
+    }.ToFrozenSet();
 
-    static readonly List<string> IgnoreDirectories = new()
+    static readonly FrozenSet<string> IgnoreDirectories = new HashSet<string>
     {
         ".stfolder", ".stversions"
-    };
+    }.ToFrozenSet();
+
+    static readonly FrozenSet<string> DoNotDeleteDirectories = new HashSet<string>
+    {
+        "slskd"
+    }.ToFrozenSet();
 
     const bool CompressionEnabled = true;
 
@@ -123,15 +129,13 @@ public static class Program
                 Organize(currentTrack);
             }
         }
-        else
-        {
-            audioFiles
-                .AsParallel()
-                .Select(LoadTrack)
-                .Where(track => track is not null)
-                .Select(track => track!)
-                .ForAll(Organize);
-        }
+
+        audioFiles
+            .AsParallel()
+            .Select(LoadTrack)
+            .Where(track => track is not null)
+            .Select(track => track!)
+            .ForAll(Organize);
 
         Conflicts.HandleTrackConflicts(TrackConflicts);
 
@@ -140,7 +144,7 @@ public static class Program
             MoveStrayFiles(movedTrackInfo);
         }
 
-        FileIO.DeleteEmptyDirectories(musicDirectory, IgnoreDirectories);
+        FileIO.DeleteEmptyDirectories(musicDirectory, IgnoreDirectories, DoNotDeleteDirectories);
 
         if (CompressionEnabled)
         {
@@ -158,13 +162,13 @@ public static class Program
             }
         }
 
-        Console.WriteLine($"End of program");
+        Console.WriteLine("End of program");
         return;
 
         void Organize(Track currentTrack)
         {
             const string pattern = "{0}. {1}{2}";
-            
+
             try
             {
                 var organized = OrganizeTrack(musicDirectory, currentTrack, pattern, invalidCharsInFileName,
@@ -225,7 +229,7 @@ public static class Program
 
             if (allRemainingFiles.Length == straysInDirectory.Length)
             {
-                FileIO.DeleteEmptyDirectories(strayDirectory.FullName, IgnoreDirectories);
+                FileIO.DeleteEmptyDirectories(strayDirectory.FullName, IgnoreDirectories, DoNotDeleteDirectories);
             }
         }
 
@@ -238,7 +242,7 @@ public static class Program
             File.Move(strayFile.FullName, Path.Combine(newDirectoryString, strayFile.Name), true);
         }
 
-        FileIO.DeleteEmptyDirectories(originalDirectory.FullName, IgnoreDirectories);
+        FileIO.DeleteEmptyDirectories(originalDirectory.FullName, IgnoreDirectories, DoNotDeleteDirectories);
     }
 
     static bool OrganizeTrack(string musicDirectory, Track currentTrack, string pattern, char[] invalidCharsInFileName,
@@ -345,7 +349,7 @@ public static class Program
         var path = fileInfo.FullName;
         try
         {
-            track = new Track(path, true);
+            track = new Track(path);
         }
         catch (Exception e)
         {
@@ -369,7 +373,7 @@ public static class Program
         }
     }
 
-    static readonly List<TrackConflict> TrackConflicts = new();
-    static readonly List<string> FilePaths = new();
-    static readonly List<MovedTrackInfo> MovedTrackInfos = new();
+    static readonly List<TrackConflict> TrackConflicts = [];
+    static readonly List<string> FilePaths = [];
+    static readonly List<MovedTrackInfo> MovedTrackInfos = [];
 }

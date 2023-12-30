@@ -1,6 +1,6 @@
 using ATL;
 
-namespace MusicRename;
+namespace MusicOrganizer;
 
 public static class Conflicts
 {
