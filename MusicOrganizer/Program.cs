@@ -1,4 +1,6 @@
-﻿using System.Collections.Frozen;
+﻿using System.Collections.Concurrent;
+using System.Collections.Frozen;
+using System.Runtime.Serialization.Json;
 using ATL;
 
 namespace MusicOrganizer;
@@ -12,26 +14,9 @@ public static class Program
     const StringComparison PathComparison = StringComparison.Ordinal;
 #endif
 
-    const bool MoveAudioFilesInParallel = true;
     const bool UseAlbumArtist = true;
     const bool UseDiscSubdirectory = false;
     const bool IgnoreHiddenFolders = true;
-
-    static readonly FrozenSet<string> AudioFileTypes = new HashSet<string>
-    {
-        ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".mp1", ".mp2", ".aax", ".caf",
-        ".m4b", ".mp4", ".mid", ".oga", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv", ".wma", ".asf"
-    }.ToFrozenSet();
-
-    static readonly FrozenSet<string> LosslessAudioFileTypes = new HashSet<string>
-    {
-        ".flac", ".wav", ".tak", ".bwav", ".bwf", ".vgm", ".vgz", ".wv"
-    }.ToFrozenSet();
-
-    static readonly FrozenSet<string> PlaylistFileTypes = new HashSet<string>
-    {
-        ".m3u", ".m3u8", ".pls", ".wpl", ".zpl", ".xspf"
-    }.ToFrozenSet();
 
     static readonly FrozenSet<string> IgnoreDirectories = new HashSet<string>
     {
@@ -45,6 +30,7 @@ public static class Program
 
     const bool CompressionEnabled = true;
 
+
     public static void Main(string[] args)
     {
         // get all files recursively from the path
@@ -56,19 +42,80 @@ public static class Program
 
         var musicDirectory = args[0];
 
-        var invalidCharsInFileName = Path.GetInvalidFileNameChars();
-        var invalidCharsInDirectoryName = invalidCharsInFileName
-            .Concat(Path.GetInvalidPathChars())
-            .Distinct()
-            .ToArray();
-
-
         // move playlists
         var playlistDirectoryPath = Path.Combine(musicDirectory, "Playlists");
         var playlistDirectory = new DirectoryInfo(playlistDirectoryPath);
         playlistDirectory.Create();
 
-        var files = Directory.EnumerateFiles(musicDirectory, "*", SearchOption.AllDirectories)
+        var files = FindAllFiles(musicDirectory);
+
+        TrackLoader.FindAudioAndPlaylistsIn(files, out var audioFiles, out var playlistFiles);
+
+        playlistFiles
+            .ToArray()
+            .AsParallel()
+            .ForAll(playlist =>
+            {
+                var playlistPath = Path.Combine(playlistDirectoryPath, playlist.Name);
+                File.Move(playlist.FullName, playlistPath, true);
+                Console.WriteLine($"Moved playlist \"{playlist.Name}\" to \"{playlistPath}\"");
+            });
+
+        var tracks = audioFiles
+            .AsParallel()
+            .Select(TrackLoader.LoadTrack)
+            .Where(track => track is not null)
+            .Select(track => track!)
+            .ToArray();
+
+        BeginOrganization(tracks, musicDirectory);
+
+        Conflicts.HandleTrackConflicts(TrackConflicts);
+
+        foreach (var movedTrackInfo in MovedTrackInfos)
+        {
+            MoveStrayFiles(movedTrackInfo);
+        }
+
+        FileIO.DeleteEmptyDirectories(musicDirectory, IgnoreDirectories, DoNotDeleteDirectories);
+
+        if (CompressionEnabled)
+        {
+            TrackLoader.FindLosslessFilesIn(musicDirectory, out var losslessFiles);
+            Console.WriteLine($"Found {losslessFiles.Length} lossless files to compress");
+
+            if (losslessFiles.Length > 0)
+            {
+                Ffmpeg.CompressFiles(losslessFiles);
+            }
+        }
+
+        Console.WriteLine("End of program");
+    }
+
+    static void BeginOrganization(Track[] tracks, string musicDirectory)
+    {
+        Dictionary<string, List<Track>> tracksByAlbum = new();
+        foreach (var file in tracks)
+        {
+            if (!tracksByAlbum.TryGetValue(file.Album, out var albumTracks))
+            {
+                albumTracks = new List<Track>(16);
+                var album = file.Album ?? string.Empty;
+                tracksByAlbum.Add(album, albumTracks);
+            }
+
+            albumTracks.Add(file);
+        }
+
+        tracksByAlbum
+            .AsParallel()
+            .ForAll(albumKvp => OrganizeAlbum(albumKvp.Value, albumKvp.Key, musicDirectory));
+    }
+
+    static FileInfo[] FindAllFiles(string musicDirectory)
+    {
+        return Directory.EnumerateFiles(musicDirectory, "*", SearchOption.AllDirectories)
             .Where(file =>
             {
                 string[] subdirectories = file.Split(Path.DirectorySeparatorChar);
@@ -99,100 +146,98 @@ public static class Program
             })
             .Select(x => new FileInfo(x))
             .ToArray();
+    }
 
-        var audioFiles = files
-            .Where(file => AudioFileTypes.Contains(file.Extension))
+    static void Organize(Track currentTrack, string musicDirectory, string album, bool useArtistSubdirectory,
+        string artistName, int totalDiscCount)
+    {
+        try
+        {
+            var organized = OrganizeTrack(musicDirectory, currentTrack, album, useArtistSubdirectory,
+                artistName, totalDiscCount,
+                out Track track, out DirectoryInfo? newDirectory);
+
+            if (!organized)
+                return;
+
+            var originalDirectoryString = Path.GetDirectoryName(track.Path);
+
+            if (originalDirectoryString is null)
+                return;
+
+            var originalDirectory = new DirectoryInfo(originalDirectoryString);
+            var newDirectoryString = newDirectory!.FullName;
+            var movedTrackInfo = new MovedTrackInfo(originalDirectory, newDirectoryString, track.Path);
+            MovedTrackInfos.Add(movedTrackInfo);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine($"Error organizing {currentTrack.Path}\n" +
+                              $"{e.Message}");
+        }
+    }
+
+    static void OrganizeAlbum(List<Track> album, string albumName, string musicRootDirectory)
+    {
+        string[] artists;
+        int totalDiscCount = 1;
+        artists = album
+            .Select(track =>
+            {
+                string artist;
+                if (UseAlbumArtist)
+                {
+                    artist = track.AlbumArtist;
+                    if (string.IsNullOrWhiteSpace(artist))
+                        artist = track.Artist;
+                }
+                else
+                {
+                    artist = track.Artist;
+                    if (string.IsNullOrWhiteSpace(artist))
+                        artist = track.AlbumArtist;
+                }
+
+                if (string.IsNullOrWhiteSpace(artist))
+                    artist = track.OriginalArtist;
+
+                if (string.IsNullOrWhiteSpace(artist))
+                    artist = "Unknown Artist";
+
+                // while we're iterating, check if the album is multi-disc
+                var discNo = track.DiscNumber ?? 1;
+                if (discNo > totalDiscCount)
+                    totalDiscCount = discNo;
+                
+                return artist;
+            })
             .ToArray();
-        var playlistFiles = files
-            .Where(file => PlaylistFileTypes.Contains(file.Extension))
-            .Where(file => file.Directory?.FullName != playlistDirectory.FullName)
-            .ToArray();
 
-        playlistFiles
-            .AsParallel()
-            .ForAll(playlist =>
-            {
-                var playlistPath = Path.Combine(playlistDirectoryPath, playlist.Name);
-                File.Move(playlist.FullName, playlistPath, true);
-                Console.WriteLine($"Moved playlist \"{playlist.Name}\" to \"{playlistPath}\"");
-            });
-
-        if (!MoveAudioFilesInParallel)
+        string mostFrequentArtist;
+        bool useArtistSubdirectory = true;
+        if (artists.Length == 1)
         {
-            var trackJob = audioFiles
-                .Select(LoadTrack)
-                .Where(track => track is not null)
-                .Select(track => track!);
+            mostFrequentArtist = artists[0];
+        }
+        else
+        {
+            var artistGroups = artists.GroupBy(x => x).ToArray();
 
-            foreach (var currentTrack in trackJob)
-            {
-                Organize(currentTrack);
-            }
+            // get the primary artist of the album if there is one.
+            mostFrequentArtist = artistGroups
+                .OrderByDescending(x => x.Count())
+                .Select(x => x.Key)
+                .First();
+
+            // if it appears to be more than one artist consistently,
+            // set useArtistSubdirectory to false
+            useArtistSubdirectory = artistGroups
+                .Count(x => x.Count() > 1) > 1;
         }
 
-        audioFiles
-            .AsParallel()
-            .Select(LoadTrack)
-            .Where(track => track is not null)
-            .Select(track => track!)
-            .ForAll(Organize);
-
-        Conflicts.HandleTrackConflicts(TrackConflicts);
-
-        foreach (var movedTrackInfo in MovedTrackInfos)
+        foreach (var track in album)
         {
-            MoveStrayFiles(movedTrackInfo);
-        }
-
-        FileIO.DeleteEmptyDirectories(musicDirectory, IgnoreDirectories, DoNotDeleteDirectories);
-
-        if (CompressionEnabled)
-        {
-            var losslessFiles = Directory.GetFiles(musicDirectory, "*", SearchOption.AllDirectories)
-                .AsParallel()
-                .Select(file => new FileInfo(file))
-                .Where(file => LosslessAudioFileTypes.Contains(file.Extension))
-                .ToArray();
-
-            Console.WriteLine($"Found {losslessFiles.Length} lossless files to compress");
-
-            if (losslessFiles.Length > 0)
-            {
-                Ffmpeg.CompressFiles(losslessFiles);
-            }
-        }
-
-        Console.WriteLine("End of program");
-        return;
-
-        void Organize(Track currentTrack)
-        {
-            const string pattern = "{0}. {1}{2}";
-
-            try
-            {
-                var organized = OrganizeTrack(musicDirectory, currentTrack, pattern, invalidCharsInFileName,
-                    invalidCharsInDirectoryName,
-                    out Track track, out DirectoryInfo? newDirectory);
-
-                if (!organized)
-                    return;
-
-                var originalDirectoryString = Path.GetDirectoryName(track.Path);
-
-                if (originalDirectoryString is null)
-                    return;
-
-                var originalDirectory = new DirectoryInfo(originalDirectoryString);
-                var newDirectoryString = newDirectory!.FullName;
-                var movedTrackInfo = new MovedTrackInfo(originalDirectory, newDirectoryString, track.Path);
-                MovedTrackInfos.Add(movedTrackInfo);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Error organizing {currentTrack.Path}\n" +
-                                  $"{e.Message}");
-            }
+            Organize(track, musicRootDirectory, albumName, useArtistSubdirectory, mostFrequentArtist, totalDiscCount);
         }
     }
 
@@ -216,7 +261,7 @@ public static class Program
 
             var allRemainingFiles = strayDirectory.GetFiles("*", SearchOption.AllDirectories);
             var straysInDirectory = allRemainingFiles
-                .Where(file => !AudioFileTypes.Contains(file.Extension))
+                .Where(file => !TrackLoader.IsAudioFile(file))
                 .ToArray();
 
             if (straysInDirectory.Length > 0)
@@ -234,8 +279,8 @@ public static class Program
         }
 
         var strayFiles = originalDirectory.GetFiles()
-            .Where(file => !AudioFileTypes.Contains(file.Extension))
-            .Where(file => !string.Equals(file.FullName, trackPath, PathComparison));
+            .Where(file => !TrackLoader.IsAudioFile(file) &&
+                           !string.Equals(file.FullName, trackPath, PathComparison));
 
         foreach (var strayFile in strayFiles)
         {
@@ -245,9 +290,15 @@ public static class Program
         FileIO.DeleteEmptyDirectories(originalDirectory.FullName, IgnoreDirectories, DoNotDeleteDirectories);
     }
 
-    static bool OrganizeTrack(string musicDirectory, Track currentTrack, string pattern, char[] invalidCharsInFileName,
-        char[] invalidCharsInDirectoryName, out Track track, out DirectoryInfo? newDirectory)
+    static bool OrganizeTrack(string musicDirectory, Track currentTrack,
+        string album,
+        bool useArtistSubdirectory,
+        string artistName,
+        int totalDiscCount,
+        out Track track,
+        out DirectoryInfo? newDirectory)
     {
+        const string pattern = "{0}. {1}{2}";
         track = currentTrack;
 
         var trackNumber = track.TrackNumber;
@@ -272,37 +323,9 @@ public static class Program
         var newFileName = trackNumber is > 0
             ? string.Format(pattern, trackNumber.Value.ToString("00"), title, extension)
             : track.Title + extension;
-
-        var cd = track.DiscNumber;
-        bool hasCd = false;
-        if (cd is > 0)
-        {
-            newFileName = $"{cd.Value:0}_{newFileName}";
-            hasCd = true;
-        }
-
-        newFileName = FileIO.ReplaceInvalidCharactersInFileName(newFileName, invalidCharsInFileName);
         List<string> pathInConstruction = new(4);
 
-        string rawArtist;
-        if (UseAlbumArtist)
-        {
-            rawArtist = track.AlbumArtist;
-            if (string.IsNullOrWhiteSpace(rawArtist))
-                rawArtist = track.Artist;
-        }
-        else
-        {
-            rawArtist = track.Artist;
-            if (string.IsNullOrWhiteSpace(rawArtist))
-                rawArtist = track.AlbumArtist;
-        }
-
-        if (string.IsNullOrWhiteSpace(rawArtist))
-            rawArtist = track.OriginalArtist;
-
-        FileIO.TryCorrectSubdirectory(invalidCharsInDirectoryName, rawArtist, "Unknown Artist", out var artist);
-        FileIO.TryCorrectSubdirectory(invalidCharsInDirectoryName, track.Album, "Unknown Album", out var album);
+        FileIO.TryCorrectSubdirectory(album, "Unknown Album", out var albumDir);
 
         var year = track.Year;
         if (year is > 1000) // ugly check for valid year
@@ -310,11 +333,38 @@ public static class Program
 
         string newPath = musicDirectory;
 
-        pathInConstruction.Add(artist);
-        pathInConstruction.Add(album);
+        if (useArtistSubdirectory)
+        {
+            FileIO.ValidateSubdirectory(artistName, out var artistSubdirectory);
+            pathInConstruction.Add(artistSubdirectory);
+        }
 
-        if (UseDiscSubdirectory && hasCd)
-            pathInConstruction.Add($"Disc {cd!.Value:0}");
+        pathInConstruction.Add(albumDir);
+
+        bool needsMetadataSave = false;
+
+        if (totalDiscCount > 1)
+        {
+            if (track.DiscNumber is null or < 1)
+            {
+                track.DiscNumber = 1;
+                needsMetadataSave = true;
+            }
+
+            if (track.DiscTotal is null or < 1)
+            {
+                track.DiscTotal = totalDiscCount;
+                needsMetadataSave = true;
+            }
+
+            var discNumber = track.DiscNumber;
+            newFileName = $"{discNumber:0}_{newFileName}";
+
+            if (UseDiscSubdirectory)
+                pathInConstruction.Add($"Disc {discNumber:0}");
+        }
+
+        newFileName = FileIO.ReplaceInvalidCharactersInFileName(newFileName);
 
         newDirectory = null;
         foreach (var path in pathInConstruction)
@@ -324,6 +374,11 @@ public static class Program
         }
 
         newPath = Path.Combine(newPath, newFileName);
+        
+        if(needsMetadataSave)
+        {
+            track.Save();
+        }
 
         if (string.Equals(track.Path, newPath, PathComparison))
         {
@@ -341,22 +396,6 @@ public static class Program
         var conflict = new TrackConflict(track, newPath);
         TrackConflicts.Add(conflict);
         return true;
-    }
-
-    public static Track? LoadTrack(FileInfo fileInfo)
-    {
-        Track? track = null;
-        var path = fileInfo.FullName;
-        try
-        {
-            track = new Track(path);
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine($"Failed to create track for {path}:\n{e}");
-        }
-
-        return track;
     }
 
     readonly struct MovedTrackInfo

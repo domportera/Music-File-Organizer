@@ -32,7 +32,7 @@ public static class Conflicts
         try
         {
             var destinationFile = new FileInfo(destinationPath);
-            var existingTrack = Program.LoadTrack(destinationFile);
+            var existingTrack = TrackLoader.LoadTrack(destinationFile);
             if (existingTrack == null)
                 throw new Exception($"Failed to load existing track at {destinationPath}");
 

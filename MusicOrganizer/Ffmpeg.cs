@@ -6,7 +6,7 @@ namespace MusicOrganizer;
 
 public static class Ffmpeg
 {
-    const int TrackCompressionThresholdKbps = 500;
+    const int TrackCompressionThresholdKbps = 900;
     const bool UseParallelCompression = true;
     const int CompressionLevel = 8;
     const bool ForceOverwriteReEncode = false;
@@ -61,7 +61,7 @@ public static class Ffmpeg
         if (!inputFile.Exists)
             return;
 
-        var originalTrack = Program.LoadTrack(inputFile);
+        var originalTrack = TrackLoader.LoadTrack(inputFile);
 
         if (originalTrack == null)
         {
@@ -141,7 +141,7 @@ public static class Ffmpeg
 
         await Task.Delay(500); // wait for the file to be written to disk
 
-        Track? convertedTrack = Program.LoadTrack(outputFile);
+        Track? convertedTrack = TrackLoader.LoadTrack(outputFile);
         outputFile.Refresh();
         if (convertedTrack == null || convertedTrack.Bitrate == 0 ||
             flacConversion.ExitCode != 0 || !outputFile.Exists || outputFile.Length == 0)

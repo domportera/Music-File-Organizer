@@ -19,19 +19,23 @@ public class FileIO
         }
     }
 
-    public static bool TryCorrectSubdirectory(char[] invalidCharsInDirectoryName, string album, string defaultName,
+    public static bool TryCorrectSubdirectory(string? preferredName, string defaultName,
         out string dir)
     {
-        if (string.IsNullOrWhiteSpace(album))
+        if (string.IsNullOrWhiteSpace(preferredName))
         {
             dir = defaultName;
             return false;
         }
 
-        dir = ReplaceInvalidCharactersInDirectoryName(album, invalidCharsInDirectoryName);
-        dir = dir.Trim();
-        RemoveDoubleSpaces(ref album);
+        ValidateSubdirectory(preferredName, out dir);
         return true;
+    }
+
+    public static void ValidateSubdirectory(string name, out string validated)
+    {
+        RemoveDoubleSpaces(ref name);
+        validated = ReplaceInvalidCharactersInDirectoryName(name).Trim();
     }
 
     public static void RemoveDoubleSpaces(ref string title)
@@ -42,10 +46,10 @@ public class FileIO
         }
     }
 
-    public static string ReplaceInvalidCharactersInFileName(string fileName, char[] invalidChars)
+    public static string ReplaceInvalidCharactersInFileName(string fileName)
     {
         var nameSpan = fileName.AsSpan();
-        foreach (var invalidChar in invalidChars)
+        foreach (var invalidChar in InvalidFileNameChars)
         {
             if (nameSpan.Contains(invalidChar))
                 fileName = fileName.Replace(invalidChar, '-');
@@ -54,17 +58,17 @@ public class FileIO
         return fileName;
     }
 
-    public static string ReplaceInvalidCharactersInDirectoryName(string directoryName, char[] invalidChars)
+    public static string ReplaceInvalidCharactersInDirectoryName(string directoryName)
     {
         var nameSpan = directoryName.AsSpan();
-        foreach (var invalidChar in invalidChars)
+        foreach (var invalidChar in InvalidPathChars)
         {
             if (nameSpan.Contains(invalidChar))
                 directoryName = directoryName.Replace(invalidChar, '_');
         }
 
         directoryName = directoryName
-            .Replace("; ", ", ")
+            .Replace(';', ',')
             .Replace("..", ".");
 
         while (directoryName.EndsWith('.'))
@@ -118,4 +122,10 @@ public class FileIO
             }
         }
     }
+
+    static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+    static readonly char[] InvalidPathChars = InvalidFileNameChars
+        .Concat(Path.GetInvalidPathChars())
+        .Distinct()
+        .ToArray();
 }
