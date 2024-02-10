@@ -29,6 +29,7 @@ public static class TrackLoader
         try
         {
             track = new Track(path);
+            Console.WriteLine($"Loaded track \"{path}\"");
         }
         catch (Exception e)
         {
@@ -70,5 +71,33 @@ public static class TrackLoader
         losslessFiles = files
             .Where(file => LosslessAudioFileTypes.Contains(file.Extension))
             .ToArray();
+    }
+
+    public static string? GetTrackArtist(Track track, bool useAlbumArtist)
+    {
+        string artist;
+        if (useAlbumArtist)
+        {
+            artist = track.AlbumArtist;
+            if (string.IsNullOrWhiteSpace(artist))
+                artist = track.Artist;
+        }
+        else
+        {
+            artist = track.Artist;
+            if (string.IsNullOrWhiteSpace(artist))
+                artist = track.AlbumArtist;
+        }
+
+        if (string.IsNullOrWhiteSpace(artist))
+            artist = track.OriginalArtist;
+
+        if (string.IsNullOrWhiteSpace(artist))
+            artist = track.Composer;
+
+        if (string.IsNullOrWhiteSpace(artist))
+            artist = track.Conductor;
+
+        return artist;
     }
 }

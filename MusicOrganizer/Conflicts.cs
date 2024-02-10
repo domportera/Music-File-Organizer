@@ -99,7 +99,7 @@ public static class Conflicts
         }
     }
 
-    const int TrackDifferenceThresholdMs = 200;
+    const int TrackDifferenceThresholdMs = 1000;
 }
 
 #pragma warning disable CS0660, CS0661

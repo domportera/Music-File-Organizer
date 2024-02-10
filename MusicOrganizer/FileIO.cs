@@ -113,7 +113,7 @@ public class FileIO
             try
             {
                 directoryInfo.Delete();
-                Console.WriteLine($"Deleted {directory}");
+                Console.WriteLine($"Deleted empty directory: {directory}");
             }
             catch (IOException e)
             {

@@ -1,6 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Frozen;
-using System.Runtime.Serialization.Json;
+﻿using System.Collections.Frozen;
 using ATL;
 
 namespace MusicOrganizer;
@@ -28,7 +26,7 @@ public static class Program
         "slskd"
     }.ToFrozenSet();
 
-    const bool CompressionEnabled = true;
+    const bool CompressionEnabled = false;
 
 
     public static void Main(string[] args)
@@ -149,7 +147,7 @@ public static class Program
     }
 
     static void Organize(Track currentTrack, string musicDirectory, string album, bool useArtistSubdirectory,
-        string artistName, int totalDiscCount)
+        string artistName, int? totalDiscCount)
     {
         try
         {
@@ -177,65 +175,100 @@ public static class Program
         }
     }
 
-    static void OrganizeAlbum(List<Track> album, string albumName, string musicRootDirectory)
+    static void OrganizeAlbum(List<Track> trackList, string albumName, string musicRootDirectory)
     {
-        string[] artists;
-        int totalDiscCount = 1;
-        artists = album
-            .Select(track =>
+        const string unknownArtist = "Unknown Artist";
+        const string variousArtists = "Various Artists";
+        
+        if (string.IsNullOrWhiteSpace(albumName))
+        {
+            foreach (var track in trackList)
             {
-                string artist;
-                if (UseAlbumArtist)
+                var artist = TrackLoader.GetTrackArtist(track, UseAlbumArtist);
+                if (string.IsNullOrWhiteSpace(artist))
                 {
-                    artist = track.AlbumArtist;
-                    if (string.IsNullOrWhiteSpace(artist))
-                        artist = track.Artist;
+                    artist = unknownArtist;
                 }
                 else
                 {
-                    artist = track.Artist;
-                    if (string.IsNullOrWhiteSpace(artist))
-                        artist = track.AlbumArtist;
+                    var artistCounter = artist.Split(';')
+                        .Where(x => !string.IsNullOrWhiteSpace(x));
+                    
+                    if (artistCounter.Count() > 1)
+                        artist = variousArtists;
                 }
 
-                if (string.IsNullOrWhiteSpace(artist))
-                    artist = track.OriginalArtist;
+                Organize(track, musicRootDirectory, albumName, true, artist, null);
+            }
 
-                if (string.IsNullOrWhiteSpace(artist))
-                    artist = "Unknown Artist";
-
+            return;
+        }
+        
+        int totalDiscCount = 1;
+        string[] artists = trackList
+            .SelectMany(track =>
+            {
+                var artist = TrackLoader.GetTrackArtist(track, UseAlbumArtist);
+                
                 // while we're iterating, check if the album is multi-disc
                 var discNo = track.DiscNumber ?? 1;
                 if (discNo > totalDiscCount)
                     totalDiscCount = discNo;
-                
-                return artist;
+
+                return artist.Split(';').Select(x => x.Trim());
             })
+            .Where(artist => !string.IsNullOrWhiteSpace(artist))
+            .OrderBy(artist => char.IsUpper(artist[0])) // prioritize "correct" capitalization
+            .DistinctBy(x => x.ToLowerInvariant())  // compare disregarding case
             .ToArray();
 
         string mostFrequentArtist;
         bool useArtistSubdirectory = true;
-        if (artists.Length == 1)
+
+        switch (artists.Length)
         {
-            mostFrequentArtist = artists[0];
+            case 0:
+                mostFrequentArtist = unknownArtist;
+                break;
+            case 1:
+                mostFrequentArtist = artists[0];
+                break;
+            case > 4:
+                mostFrequentArtist = variousArtists;
+                break;
+            default:
+            {
+                // get top two most frequent artists
+                var artistCount = new Dictionary<string, int>(artists.Length);
+                foreach (var artist in artists)
+                {
+                    if (!artistCount.TryGetValue(artist, out var count))
+                    {
+                        artistCount[artist] = 1;
+                    }
+                    else
+                    {
+                        artistCount[artist] = count + 1;
+                    }
+                }
+                
+                // get the most frequent artist. If theres a tie, set mostFrequentArtist to unknown
+                var artistsSorted = artistCount
+                    .OrderByDescending(x => x.Value)
+                    .Select(x => x.Key)
+                    .ToArray();
+
+                var mostFrequentArtistFound = artistsSorted[0];
+
+                mostFrequentArtist = artistCount[mostFrequentArtistFound] == artistCount[artistsSorted[1]]
+                    ? variousArtists 
+                    : mostFrequentArtistFound;
+
+                break;
+            }
         }
-        else
-        {
-            var artistGroups = artists.GroupBy(x => x).ToArray();
 
-            // get the primary artist of the album if there is one.
-            mostFrequentArtist = artistGroups
-                .OrderByDescending(x => x.Count())
-                .Select(x => x.Key)
-                .First();
-
-            // if it appears to be more than one artist consistently,
-            // set useArtistSubdirectory to false
-            useArtistSubdirectory = artistGroups
-                .Count(x => x.Count() > 1) > 1;
-        }
-
-        foreach (var track in album)
+        foreach (var track in trackList)
         {
             Organize(track, musicRootDirectory, albumName, useArtistSubdirectory, mostFrequentArtist, totalDiscCount);
         }
@@ -293,8 +326,8 @@ public static class Program
     static bool OrganizeTrack(string musicDirectory, Track currentTrack,
         string album,
         bool useArtistSubdirectory,
-        string artistName,
-        int totalDiscCount,
+        string? artistName,
+        int? totalDiscCount,
         out Track track,
         out DirectoryInfo? newDirectory)
     {
@@ -343,7 +376,7 @@ public static class Program
 
         bool needsMetadataSave = false;
 
-        if (totalDiscCount > 1)
+        if (totalDiscCount is > 1)
         {
             if (track.DiscNumber is null or < 1)
             {
@@ -374,8 +407,8 @@ public static class Program
         }
 
         newPath = Path.Combine(newPath, newFileName);
-        
-        if(needsMetadataSave)
+
+        if (needsMetadataSave)
         {
             track.Save();
         }
