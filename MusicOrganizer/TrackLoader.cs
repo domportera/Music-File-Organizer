@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using ATL;
 
+namespace MusicOrganizer;
+
 public static class TrackLoader
 {
     static readonly FrozenSet<string> AudioFileTypes = new HashSet<string>

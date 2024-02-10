@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using ATL;
-using MusicOrganizer;
+
+namespace MusicOrganizer;
 
 public static partial class Organization
 {

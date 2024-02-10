@@ -1,6 +1,6 @@
 namespace MusicOrganizer;
 
-public class FileIO
+public static class FileIO
 {
     // if windows, use StringComparison.OrdinalIgnoreCase, otherwise use StringComparison.Ordinal
 #if WINDOWS
