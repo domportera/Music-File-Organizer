@@ -1,25 +1,27 @@
+using System.Text.RegularExpressions;
 using ATL;
 using MusicOrganizer;
 
-public static class Organization
+public static partial class Organization
 {
     // todo - having these global variables is error prone 
     static readonly List<TrackConflict> TrackConflicts = [];
     static readonly List<MovedTrackInfo> MovedTrackInfos = [];
-    
+
+    // todo - create an Args class to simplify argument passing
     public static void OrganizeTracks(
-        FileInfo[] audioFiles, 
-        string musicDirectory, 
-        bool useAlbumArtist, 
-        bool useDiscSubdirectory, 
-        IReadOnlyCollection<string> ignoreDirectories, 
+        FileInfo[] audioFiles,
+        string musicDirectory,
+        bool useAlbumArtist,
+        bool useDiscSubdirectory,
+        IReadOnlyCollection<string> ignoreDirectories,
         IReadOnlyCollection<string> doNotDeleteDirectories)
     {
         TrackConflicts.Clear();
         MovedTrackInfos.Clear();
-        
+
         Track[] tracks = TrackLoader.GetValidAudioFiles(audioFiles);
-        
+
         Dictionary<string, List<Track>> tracksByAlbum = new();
         foreach (var file in tracks)
         {
@@ -39,15 +41,16 @@ public static class Organization
             {
                 OrganizeAlbum(albumKvp.Value, albumKvp.Key, musicDirectory, useAlbumArtist, useDiscSubdirectory);
             });
-        
+
         Conflicts.HandleTrackConflicts(TrackConflicts);
-        
+
         MoveAllStrayFiles(MovedTrackInfos, ignoreDirectories, doNotDeleteDirectories);
         TrackConflicts.Clear();
         FileIO.DeleteEmptyDirectories(musicDirectory, ignoreDirectories, doNotDeleteDirectories);
     }
 
-    static void OrganizeAlbum(List<Track> trackList, string albumName, string musicRootDirectory, bool useAlbumArtist, bool useDiscSubdirectory)
+    static void OrganizeAlbum(List<Track> trackList, string albumName, string musicRootDirectory, bool useAlbumArtist,
+        bool useDiscSubdirectory)
     {
         const string unknownArtist = "Unknown Artist";
         const string variousArtists = "Various Artists";
@@ -142,7 +145,8 @@ public static class Organization
 
         foreach (var track in trackList)
         {
-            NameAndMoveTrack(track, musicRootDirectory, albumName, useArtistSubdirectory, mostFrequentArtist, totalDiscCount, useDiscSubdirectory);
+            NameAndMoveTrack(track, musicRootDirectory, albumName, useArtistSubdirectory, mostFrequentArtist,
+                totalDiscCount, useDiscSubdirectory);
         }
     }
 
@@ -184,50 +188,44 @@ public static class Organization
         out Track track,
         out DirectoryInfo? newDirectory)
     {
-        const string pattern = "{0}. {1}{2}";
         track = currentTrack;
 
         var trackNumber = track.TrackNumber;
         var title = track.Title;
-        var titleSpan = track.Title.AsSpan();
+        bool needsMetadataSave = false;
 
-        // remove erroneous track numbers prefixed to the title, even if repeating like "01 - 01 - 01 - Title"
-        // this can occur when the track has no title metadata and this application is run multiple times
-        if (Path.GetFileNameWithoutExtension(track.Path) == track.Title)
+        if (title == null)
         {
-            while (titleSpan.Length > 0 && !char.IsLetter(titleSpan[0]))
-            {
-                titleSpan = titleSpan[1..];
-            }
+            title = Path.GetFileNameWithoutExtension(track.Path);
 
-            title = titleSpan.ToString();
+            //if title begins with a track number, remove it
+            title = TrackNumberInFileNameRegex.Replace(title, "", 1);
+
+            track.Title = title;
+            needsMetadataSave = true;
         }
 
-        FileIO.RemoveDoubleSpaces(ref title);
-
         string extension = Path.GetExtension(track.Path);
+        const string fileNamePattern = "{0}. {1}{2}";
         var newFileName = trackNumber is > 0
-            ? string.Format(pattern, trackNumber.Value.ToString("00"), title, extension)
+            ? string.Format(fileNamePattern, trackNumber.Value.ToString("00"), title, extension)
             : track.Title + extension;
-        List<string> pathInConstruction = new(4);
 
-        FileIO.TryCorrectSubdirectory(album, "Unknown Album", out var albumDir);
+
+        FileIO.CorrectSubdirectory(album, "Unknown Album", out album);
 
         var year = track.Year;
-        if (year is > 1000) // ugly check for valid year
+        if (year is > 0) // ugly check for valid year
             album = $"{year} - {album}";
 
-        string newPath = musicDirectory;
-
+        List<string> pathInConstruction = new(4);
         if (useArtistSubdirectory)
         {
             FileIO.ValidateSubdirectory(artistName, out var artistSubdirectory);
             pathInConstruction.Add(artistSubdirectory);
         }
 
-        pathInConstruction.Add(albumDir);
-
-        bool needsMetadataSave = false;
+        pathInConstruction.Add(album);
 
         if (totalDiscCount is > 1)
         {
@@ -253,6 +251,7 @@ public static class Organization
         newFileName = FileIO.ReplaceInvalidCharactersInFileName(newFileName);
 
         newDirectory = null;
+        string newPath = musicDirectory;
         foreach (var path in pathInConstruction)
         {
             newPath = Path.Combine(newPath, path);
@@ -274,8 +273,7 @@ public static class Organization
 
         if (!File.Exists(newPath))
         {
-            var moved = FileIO.MoveFile(track.Path, newPath);
-            return moved;
+            return FileIO.TryMoveFile(track.Path, newPath);
         }
 
         var conflict = new TrackConflict(track, newPath);
@@ -284,7 +282,8 @@ public static class Organization
     }
 
 
-    static void MoveStrayFiles(MovedTrackInfo movedTrackInfo, IReadOnlyCollection<string> ignoreDirectories, IReadOnlyCollection<string> doNotDeleteDirectories)
+    static void MoveStrayFiles(MovedTrackInfo movedTrackInfo, IReadOnlyCollection<string> ignoreDirectories,
+        IReadOnlyCollection<string> doNotDeleteDirectories)
     {
         var originalDirectory = movedTrackInfo.OriginalDirectory;
         if (!originalDirectory.Exists)
@@ -309,7 +308,7 @@ public static class Organization
 
             if (straysInDirectory.Length > 0)
                 Directory.CreateDirectory(newDir);
-            
+
             FileIO.MoveFilesInto(newDir, straysInDirectory);
 
             if (allRemainingFiles.Length == straysInDirectory.Length)
@@ -330,25 +329,27 @@ public static class Organization
         FileIO.DeleteEmptyDirectories(originalDirectory.FullName, ignoreDirectories, doNotDeleteDirectories);
     }
 
-    static void MoveAllStrayFiles(List<MovedTrackInfo> movedTrackInfos, IReadOnlyCollection<string> ignoreDirectories, IReadOnlyCollection<string> doNotDeleteDirectories)
+    static void MoveAllStrayFiles(List<MovedTrackInfo> movedTrackInfos, IReadOnlyCollection<string> ignoreDirectories,
+        IReadOnlyCollection<string> doNotDeleteDirectories)
     {
         foreach (var movedTrackInfo in movedTrackInfos)
         {
             MoveStrayFiles(movedTrackInfo, ignoreDirectories, doNotDeleteDirectories);
         }
     }
-}
 
-public readonly struct MovedTrackInfo
-{
-    public readonly DirectoryInfo OriginalDirectory;
-    public readonly string NewDirectoryString;
-    public readonly string OriginalTrackPath;
+    static readonly Regex TrackNumberInFileNameRegex = MyRegex();
 
-    public MovedTrackInfo(DirectoryInfo originalDirectory, string newDirectoryString, string originalTrackPath)
+    [GeneratedRegex(@"^\d+[\.\-\s_]+\s*")]
+    private static partial Regex MyRegex();
+
+    public readonly struct MovedTrackInfo(
+        DirectoryInfo originalDirectory,
+        string newDirectoryString,
+        string originalTrackPath)
     {
-        OriginalDirectory = originalDirectory;
-        NewDirectoryString = newDirectoryString;
-        OriginalTrackPath = originalTrackPath;
+        public readonly DirectoryInfo OriginalDirectory = originalDirectory;
+        public readonly string NewDirectoryString = newDirectoryString;
+        public readonly string OriginalTrackPath = originalTrackPath;
     }
 }

@@ -9,7 +9,7 @@ public class FileIO
     public const StringComparison PathComparison = StringComparison.Ordinal;
 #endif
     
-    public static bool MoveFile(string srcPath, string destinationPath, bool overwrite = false)
+    public static bool TryMoveFile(string srcPath, string destinationPath, bool overwrite = false)
     {
         try
         {
@@ -26,17 +26,16 @@ public class FileIO
         }
     }
 
-    public static bool TryCorrectSubdirectory(string? preferredName, string defaultName,
+    public static void CorrectSubdirectory(string? preferredName, string defaultName,
         out string dir)
     {
         if (string.IsNullOrWhiteSpace(preferredName))
         {
             dir = defaultName;
-            return false;
+            return;
         }
 
         ValidateSubdirectory(preferredName, out dir);
-        return true;
     }
 
     public static void ValidateSubdirectory(string name, out string validated)
