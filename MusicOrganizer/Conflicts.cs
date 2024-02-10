@@ -25,7 +25,7 @@ public static class Conflicts
         }
     }
 
-    public static bool TryResolveConflict(TrackConflict conflict)
+    static bool TryResolveConflict(TrackConflict conflict)
     {
         var track = conflict.Track;
         var destinationPath = conflict.ExistingTrackPath;

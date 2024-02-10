@@ -73,6 +73,17 @@ public static class TrackLoader
             .ToArray();
     }
 
+    public static Track[] GetValidAudioFiles(FileInfo[] potentialAudioFiles)
+    {
+        var tracks = potentialAudioFiles
+            .AsParallel()
+            .Select(LoadTrack)
+            .Where(track => track is not null)
+            .Select(track => track!)
+            .ToArray();
+        return tracks;
+    }
+
     public static string? GetTrackArtist(Track track, bool useAlbumArtist)
     {
         string artist;

@@ -2,6 +2,13 @@ namespace MusicOrganizer;
 
 public class FileIO
 {
+    // if windows, use StringComparison.OrdinalIgnoreCase, otherwise use StringComparison.Ordinal
+#if WINDOWS
+    const StringComparison PathComparison = StringComparison.OrdinalIgnoreCase;
+#else
+    public const StringComparison PathComparison = StringComparison.Ordinal;
+#endif
+    
     public static bool MoveFile(string srcPath, string destinationPath, bool overwrite = false)
     {
         try
@@ -78,7 +85,8 @@ public class FileIO
         return directoryName;
     }
 
-    public static void DeleteEmptyDirectories(string rootDir, ICollection<string> ignoreDirectories, ICollection<string> doNotDeleteDirectories)
+    public static void DeleteEmptyDirectories(string rootDir, IReadOnlyCollection<string> ignoreDirectories,
+        IReadOnlyCollection<string> doNotDeleteDirectories)
     {
         var directories = Directory.GetDirectories(rootDir, "*", SearchOption.AllDirectories)
             .OrderByDescending(directory => directory.Length);
@@ -103,10 +111,10 @@ public class FileIO
                 continue;
             }
 
-            var skip =Directory.GetFiles(directory).Length != 0 
-                      || Directory.GetDirectories(directory).Length != 0
-                      || doNotDeleteDirectories.Contains(directoryInfo.Name);
-            
+            var skip = Directory.GetFiles(directory).Length != 0
+                       || Directory.GetDirectories(directory).Length != 0
+                       || doNotDeleteDirectories.Contains(directoryInfo.Name);
+
             if (skip)
                 continue;
 
@@ -123,7 +131,56 @@ public class FileIO
         }
     }
 
+    public static FileInfo[] FindAllFiles(string musicDirectory, bool ignoreHiddenFolders, IReadOnlyCollection<string> ignoreDirectories)
+    {
+        return Directory.EnumerateFiles(musicDirectory, "*", SearchOption.AllDirectories)
+            .Where(file =>
+            {
+                string[] subdirectories = file.Split(Path.DirectorySeparatorChar);
+                if (subdirectories.Length <= 0)
+                {
+                    return true;
+                }
+
+                if (ignoreHiddenFolders)
+                {
+                    foreach (var subdirectory in subdirectories)
+                    {
+                        if (subdirectory.StartsWith('.'))
+                            return false;
+                    }
+                }
+
+                foreach (var ignoredDir in ignoreDirectories)
+                {
+                    foreach (var subdirectory in subdirectories)
+                    {
+                        if (subdirectory.Equals(ignoredDir, PathComparison))
+                            return false;
+                    }
+                }
+
+                return true;
+            })
+            .Select(x => new FileInfo(x))
+            .ToArray();
+    }
+
+    public static void MoveFilesInto(string directory, FileInfo[] files)
+    {
+        Directory.CreateDirectory(directory);
+        files
+            .AsParallel()
+            .ForAll(file =>
+            {
+                var destinationPath = Path.Combine(directory, file.Name);
+                File.Move(file.FullName, destinationPath, true);
+                Console.WriteLine($"Moved playlist \"{file.Name}\" to \"{destinationPath}\"");
+            });
+    }
+
     static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+
     static readonly char[] InvalidPathChars = InvalidFileNameChars
         .Concat(Path.GetInvalidPathChars())
         .Distinct()
