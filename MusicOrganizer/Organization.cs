@@ -200,17 +200,23 @@ public static partial class Organization
             title = Path.GetFileNameWithoutExtension(track.Path);
 
             //if title begins with a track number, remove it
-            title = TrackNumberInFileNameRegex.Replace(title, "", 1);
+            title = TrackNumberInFileNameRegex.Replace(title, "");
 
             track.Title = title;
             needsMetadataSave = true;
         }
-
+        else if (TrackNumberInFileNameRegex.Count(title) > 1)
+        {
+            title = TrackNumberInFileNameRegex.Replace(title, "");
+            track.Title = title;
+            needsMetadataSave = true;
+        }
+        
         string extension = Path.GetExtension(track.Path);
         const string fileNamePattern = "{0}. {1}{2}";
         var newFileName = trackNumber is > 0
             ? string.Format(fileNamePattern, trackNumber.Value.ToString("00"), title, extension)
-            : track.Title + extension;
+            : title + extension;
 
 
         FileIO.CorrectSubdirectory(album, "Unknown Album", out album);
@@ -263,7 +269,11 @@ public static partial class Organization
 
         if (needsMetadataSave)
         {
-            track.Save();
+            var saved = track.Save();
+            var log = saved 
+                ? $"Saved metadata for \"{track.Path}\"" 
+                : $"Failed to save metadata for \"{track.Path}\"";
+            Console.WriteLine(log);
         }
 
         if (string.Equals(track.Path, newPath, FileIO.PathComparison))
