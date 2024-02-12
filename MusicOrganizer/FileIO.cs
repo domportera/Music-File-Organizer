@@ -173,8 +173,16 @@ public static class FileIO
             .ForAll(file =>
             {
                 var destinationPath = Path.Combine(directory, file.Name);
-                File.Move(file.FullName, destinationPath, true);
-                Console.WriteLine($"Moved playlist \"{file.Name}\" to \"{destinationPath}\"");
+                try
+                {
+                    File.Move(file.FullName, destinationPath, true);
+                    Console.WriteLine($"Moved \"{file.Name}\" -> \"{destinationPath}\"");
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"Error moving {file.FullName} to {destinationPath}\n" +
+                                      $"{e.Message}");
+                }
             });
     }
 

@@ -176,7 +176,7 @@ public static partial class Organization
         catch (Exception e)
         {
             Console.WriteLine($"Error organizing {currentTrack.Path}\n" +
-                              $"{e.Message}");
+                              $"{e}");
         }
     }
 
