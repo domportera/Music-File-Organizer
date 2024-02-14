@@ -195,21 +195,24 @@ public static partial class Organization
         var title = track.Title;
         bool needsMetadataSave = false;
 
-        if (title == null)
+        if (string.IsNullOrWhiteSpace(title))
         {
             title = Path.GetFileNameWithoutExtension(track.Path);
 
             //if title begins with a track number, remove it
-            title = TrackNumberInFileNameRegex.Replace(title, "");
+            title = BeginsWithTrackNumberRegex.Replace(title, "");
 
             track.Title = title;
             needsMetadataSave = true;
         }
-        else if (TrackNumberInFileNameRegex.Count(title) > 1)
+        else
         {
-            title = TrackNumberInFileNameRegex.Replace(title, "");
-            track.Title = title;
-            needsMetadataSave = true;
+            while (BeginsWithTrackNumberRegex.IsMatch(title))
+            {
+                title = BeginsWithTrackNumberRegex.Replace(title, "");
+                needsMetadataSave = true;
+                track.Title = title;
+            }
         }
         
         string extension = Path.GetExtension(track.Path);
@@ -349,9 +352,9 @@ public static partial class Organization
         }
     }
 
-    static readonly Regex TrackNumberInFileNameRegex = MyRegex();
+    static readonly Regex BeginsWithTrackNumberRegex = MyRegex();
 
-    [GeneratedRegex(@"^\d+[\.\-\s_]+\s*")]
+    [GeneratedRegex(@"^\d+[\.\-_](?!\d)\s*")]
     private static partial Regex MyRegex();
 
     public readonly struct MovedTrackInfo(
