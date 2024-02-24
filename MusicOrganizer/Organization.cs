@@ -214,7 +214,7 @@ public static partial class Organization
                 track.Title = title;
             }
         }
-        
+
         string extension = Path.GetExtension(track.Path);
         const string fileNamePattern = "{0}. {1}{2}";
         var newFileName = trackNumber is > 0
@@ -236,26 +236,43 @@ public static partial class Organization
         }
 
         pathInConstruction.Add(album);
+        
+        if (track.DiscNumber is null or < 1)
+        {
+            track.DiscNumber = 1;
+            needsMetadataSave = true;
+        }
+
+        if (track.DiscTotal is null or < 1)
+        {
+            track.DiscTotal = totalDiscCount;
+            needsMetadataSave = true;
+        }
 
         if (totalDiscCount is > 1)
         {
-            if (track.DiscNumber is null or < 1)
-            {
-                track.DiscNumber = 1;
-                needsMetadataSave = true;
-            }
-
-            if (track.DiscTotal is null or < 1)
-            {
-                track.DiscTotal = totalDiscCount;
-                needsMetadataSave = true;
-            }
-
             var discNumber = track.DiscNumber;
             newFileName = $"{discNumber:0}_{newFileName}";
 
             if (useDiscSubdirectory)
                 pathInConstruction.Add($"Disc {discNumber:0}");
+        }
+
+        var artistTag = track.Artist;
+        var albumArtistTag = track.AlbumArtist;
+        
+        var hasArtist = !string.IsNullOrWhiteSpace(artistTag);
+        var hasAlbumArtist = !string.IsNullOrWhiteSpace(albumArtistTag);
+
+        if (!hasArtist && hasAlbumArtist)
+        {
+            track.Artist = albumArtistTag;
+            needsMetadataSave = true;
+        }
+        else if (hasArtist && !hasAlbumArtist)
+        {
+            track.AlbumArtist = artistTag;
+            needsMetadataSave = true;
         }
 
         newFileName = FileIO.ReplaceInvalidCharactersInFileName(newFileName);
@@ -273,8 +290,8 @@ public static partial class Organization
         if (needsMetadataSave)
         {
             var saved = track.Save();
-            var log = saved 
-                ? $"Saved metadata for \"{track.Path}\"" 
+            var log = saved
+                ? $"Saved metadata for \"{track.Path}\""
                 : $"Failed to save metadata for \"{track.Path}\"";
             Console.WriteLine(log);
         }
@@ -290,6 +307,7 @@ public static partial class Organization
             return FileIO.TryMoveFile(track.Path, newPath);
         }
 
+         // todo - detect track conflicts using metadata
         var conflict = new TrackConflict(track, newPath);
         TrackConflicts.Add(conflict);
         return true;

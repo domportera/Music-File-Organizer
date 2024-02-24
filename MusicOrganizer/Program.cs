@@ -23,7 +23,7 @@ public static class Program
 
     public static void Main(string[] args)
     {
-        if (!ArgsAreValid(args, out var musicDirectory)) 
+        if (!TryParseArgs(args, out var musicDirectory)) 
             return;
 
         var files = FileIO.FindAllFiles(musicDirectory, IgnoreHiddenFolders, IgnoreDirectories);
@@ -45,7 +45,7 @@ public static class Program
         Console.WriteLine("End of program");
     }
 
-    static bool ArgsAreValid(IReadOnlyList<string> args, out string musicDirectory)
+    static bool TryParseArgs(IReadOnlyList<string> args, out string musicDirectory)
     {
         bool failedStartup = false;
         // get all files recursively from the path
